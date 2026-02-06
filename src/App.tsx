@@ -262,11 +262,11 @@ const App = (): JSX.Element => {
                   </button>
                   <button
                     type="button"
-                    className={track.solo ? 'active' : ''}
+                    className={`solo-button${track.solo ? ' active' : ''}`}
                     onClick={() => handleToggleSolo(track.id)}
                     disabled={!isReady}
                   >
-                    {track.solo ? 'これだけ聞く中' : 'これだけ聞く'}
+                    {track.solo ? 'この音だけ再生中' : 'これだけ聞く'}
                   </button>
                   <label>
                     音量

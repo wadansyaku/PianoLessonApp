@@ -30,6 +30,12 @@ interface WindowWithWebkitAudio extends Window {
   webkitAudioContext?: AudioContextCtor;
 }
 
+interface NavigatorWithAudioSession extends Navigator {
+  audioSession?: {
+    type?: string;
+  };
+}
+
 const TARGET_LAST_BAR = 110;
 const TARGET_BAR_COUNT = TARGET_LAST_BAR + 1;
 const MASTER_GAIN_TARGET = 0.55;
@@ -46,6 +52,7 @@ export class AudioEngine {
   private postFilterNode: BiquadFilterNode | null = null;
   private masterGainNode: GainNode | null = null;
   private stretchNode: AudioWorkletNode | null = null;
+  private workletEnabled = false;
 
   private readonly buffers = new Map<TrackId, AudioBuffer>();
   private readonly trackGainNodes = new Map<TrackId, GainNode>();
@@ -126,18 +133,7 @@ export class AudioEngine {
       }
 
       this.audioCtx = new AudioContextClass();
-      if (!this.audioCtx.audioWorklet || typeof this.audioCtx.audioWorklet.addModule !== 'function') {
-        throw new Error(
-          'このブラウザでは高音質の音声処理に対応していません。SafariかChromeの最新版で開いてください。'
-        );
-      }
-      if (typeof AudioWorkletNode === 'undefined') {
-        throw new Error(
-          'このブラウザでは音声処理ノードに対応していません。SafariかChromeの最新版で開いてください。'
-        );
-      }
-
-      await this.audioCtx.audioWorklet.addModule('/worklets/soundtouch-worklet.js');
+      this.configureMobileAudioPolicy();
 
       this.mixGainNode = this.audioCtx.createGain();
       this.postFilterNode = this.audioCtx.createBiquadFilter();
@@ -147,19 +143,15 @@ export class AudioEngine {
       this.masterGainNode = this.audioCtx.createGain();
       this.masterGainNode.gain.value = MASTER_GAIN_TARGET;
 
-      this.stretchNode = new AudioWorkletNode(this.audioCtx, 'soundtouch-processor', {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        outputChannelCount: [2],
-        parameterData: {
-          rate: 1,
-          tempo: 1,
-          pitch: 1 / this.getTempoRatio()
-        }
-      });
+      this.workletEnabled = await this.setupStretchWorklet();
+      if (this.workletEnabled && this.stretchNode) {
+        this.mixGainNode.connect(this.stretchNode);
+        this.stretchNode.connect(this.postFilterNode);
+      } else {
+        // Fallback: keep app usable even on browsers without AudioWorklet.
+        this.mixGainNode.connect(this.postFilterNode);
+      }
 
-      this.mixGainNode.connect(this.stretchNode);
-      this.stretchNode.connect(this.postFilterNode);
       this.postFilterNode.connect(this.masterGainNode);
       this.masterGainNode.connect(this.audioCtx.destination);
 
@@ -198,6 +190,8 @@ export class AudioEngine {
     if (this.audioCtx.state === 'suspended') {
       await this.audioCtx.resume();
     }
+
+    this.configureMobileAudioPolicy();
 
     const offsetSec = this.clampInputOffset(this.pausedInputOffsetSec);
     const resolvedOffset =
@@ -734,7 +728,7 @@ export class AudioEngine {
   }
 
   private setTempoParameters(transitionSec = 0): void {
-    if (!this.stretchNode || !this.audioCtx) {
+    if (!this.workletEnabled || !this.stretchNode || !this.audioCtx) {
       return;
     }
 
@@ -928,6 +922,7 @@ export class AudioEngine {
     this.mixGainNode?.disconnect();
 
     this.stretchNode = null;
+    this.workletEnabled = false;
     this.postFilterNode = null;
     this.masterGainNode = null;
     this.mixGainNode = null;
@@ -948,6 +943,73 @@ export class AudioEngine {
     this.pausedInputOffsetSec = 0;
     this.barStartSec = [0];
     this.selectedStartBar = 0;
+  }
+
+  private async setupStretchWorklet(): Promise<boolean> {
+    if (!this.audioCtx) {
+      return false;
+    }
+
+    const hasWorkletApi =
+      !!this.audioCtx.audioWorklet &&
+      typeof this.audioCtx.audioWorklet.addModule === 'function' &&
+      typeof AudioWorkletNode !== 'undefined';
+
+    if (!hasWorkletApi) {
+      return false;
+    }
+
+    try {
+      await this.audioCtx.audioWorklet.addModule('/worklets/soundtouch-worklet.js');
+      this.stretchNode = new AudioWorkletNode(this.audioCtx, 'soundtouch-processor', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+        parameterData: {
+          rate: 1,
+          tempo: 1,
+          pitch: 1 / this.getTempoRatio()
+        }
+      });
+      return true;
+    } catch {
+      this.stretchNode = null;
+      return false;
+    }
+  }
+
+  private configureMobileAudioPolicy(): void {
+    const nav = navigator as NavigatorWithAudioSession;
+    try {
+      if (nav.audioSession) {
+        nav.audioSession.type = 'playback';
+      }
+    } catch {
+      // no-op
+    }
+
+    if ('mediaSession' in navigator && navigator.mediaSession) {
+      if (typeof MediaMetadata !== 'undefined') {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: '練習プレイヤー',
+          artist: 'PianoLessonApp'
+        });
+      }
+
+      try {
+        navigator.mediaSession.setActionHandler('play', () => {
+          void this.play();
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+          this.pause();
+        });
+        navigator.mediaSession.setActionHandler('stop', () => {
+          this.stop();
+        });
+      } catch {
+        // no-op
+      }
+    }
   }
 }
 
