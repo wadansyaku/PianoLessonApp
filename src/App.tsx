@@ -254,7 +254,7 @@ const App = (): JSX.Element => {
                 <div className="track-actions">
                   <button
                     type="button"
-                    className={track.mute ? 'active' : ''}
+                    className={`track-toggle-button${track.mute ? ' active' : ''}`}
                     onClick={() => handleToggleMute(track.id)}
                     disabled={!isReady}
                   >
@@ -262,7 +262,7 @@ const App = (): JSX.Element => {
                   </button>
                   <button
                     type="button"
-                    className={`solo-button${track.solo ? ' active' : ''}`}
+                    className={`track-toggle-button${track.solo ? ' active' : ''}`}
                     onClick={() => handleToggleSolo(track.id)}
                     disabled={!isReady}
                   >
