@@ -17,6 +17,7 @@ const App = (): JSX.Element => {
   const engine = useMemo(() => createAudioEngine(), []);
   const [engineState, setEngineState] = useState(() => engine.getState());
   const [pendingBar, setPendingBar] = useState(0);
+  const [isEditingBar, setIsEditingBar] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshState = useCallback(() => {
@@ -56,10 +57,10 @@ const App = (): JSX.Element => {
   }, [engineState.selectedStartBar]);
 
   useEffect(() => {
-    if (engineState.playing) {
+    if (engineState.playing && !isEditingBar) {
       setPendingBar(engineState.currentBar);
     }
-  }, [engineState.playing, engineState.currentBar]);
+  }, [engineState.playing, engineState.currentBar, isEditingBar]);
 
   const handleToggleMute = (trackId: TrackId): void => {
     engine.toggleMute(trackId);
@@ -77,11 +78,20 @@ const App = (): JSX.Element => {
   };
 
   const updateStartBar = (rawValue: number): void => {
-    if (!isReady || !Number.isFinite(rawValue)) {
+    if (!Number.isFinite(rawValue)) {
       return;
     }
 
     const next = Math.min(engineState.maxBar, Math.max(0, Math.round(rawValue)));
+    setPendingBar(next);
+  };
+
+  const commitStartBar = (): void => {
+    if (!isReady) {
+      return;
+    }
+
+    const next = Math.min(engineState.maxBar, Math.max(0, Math.round(pendingBar)));
     setPendingBar(next);
     void runAction(() => engine.setStartBar(next));
   };
@@ -96,160 +106,187 @@ const App = (): JSX.Element => {
           ページを開くと自動で準備します。小節をえらんで、その場所から再生できます。
         </p>
 
-        <div className="transport-row">
-          <button
-            type="button"
-            onClick={() => {
-              void runAction(() => engine.play());
-            }}
-            disabled={!isReady || engineState.playing}
-          >
-            再生
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              engine.pause();
-              refreshState();
-            }}
-            disabled={!isReady || !engineState.playing}
-          >
-            一時停止
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              engine.stop();
-              refreshState();
-            }}
-            disabled={!isReady || (!engineState.playing && engineState.currentInputSec === 0)}
-          >
-            最初に戻す
-          </button>
-        </div>
+        <section className="top-panel">
+          <div className="transport-row">
+            <button
+              type="button"
+              onClick={() => {
+                void runAction(() => engine.play());
+              }}
+              disabled={!isReady || engineState.playing}
+            >
+              再生
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                engine.pause();
+                refreshState();
+              }}
+              disabled={!isReady || !engineState.playing}
+            >
+              一時停止
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                engine.stop();
+                refreshState();
+              }}
+              disabled={!isReady || (!engineState.playing && engineState.currentInputSec === 0)}
+            >
+              最初に戻す
+            </button>
+          </div>
 
-        <div className="status-grid">
-          <div>
-            <span className="label">速さ（BPM）</span>
-            <div className="bpm-controls">
-              <button
-                type="button"
-                onClick={() => {
-                  void runAction(() => engine.changeBpm(-BPM_STEP));
-                }}
-                disabled={!isReady || engineState.bpm <= MIN_BPM}
-              >
-                -
-              </button>
-              <strong>{engineState.bpm}</strong>
-              <button
-                type="button"
-                onClick={() => {
-                  void runAction(() => engine.changeBpm(BPM_STEP));
-                }}
-                disabled={!isReady || engineState.bpm >= MAX_BPM}
-              >
-                +
-              </button>
+          <div className="status-grid">
+            <div>
+              <span className="label">速さ（BPM）</span>
+              <div className="bpm-controls">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void runAction(() => engine.changeBpm(-BPM_STEP));
+                  }}
+                  disabled={!isReady || engineState.bpm <= MIN_BPM}
+                >
+                  -
+                </button>
+                <strong>{engineState.bpm}</strong>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void runAction(() => engine.changeBpm(BPM_STEP));
+                  }}
+                  disabled={!isReady || engineState.bpm >= MAX_BPM}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <span className="label">いまの場所</span>
+              <strong>
+                {formatSec(engineState.currentInputSec)} / {formatSec(engineState.durationSec)}
+              </strong>
+              <small>
+                小節 {engineState.currentBar} / {engineState.maxBar}
+              </small>
             </div>
           </div>
 
-          <div>
-            <span className="label">いまの場所</span>
-            <strong>
-              {formatSec(engineState.currentInputSec)} / {formatSec(engineState.durationSec)}
-            </strong>
+          <div className="position-picker">
+            <span className="label">ここから再生する小節</span>
+            <div className="position-inputs">
+              <input
+                type="range"
+                min={0}
+                max={engineState.maxBar}
+                step={1}
+                value={pendingBar}
+                onPointerDown={() => {
+                  setIsEditingBar(true);
+                }}
+                onPointerUp={() => {
+                  setIsEditingBar(false);
+                  commitStartBar();
+                }}
+                onBlur={() => {
+                  setIsEditingBar(false);
+                  commitStartBar();
+                }}
+                onChange={(event) => {
+                  updateStartBar(Number(event.target.value));
+                }}
+                disabled={!isReady}
+              />
+              <input
+                type="number"
+                min={0}
+                max={engineState.maxBar}
+                step={1}
+                value={pendingBar}
+                onChange={(event) => {
+                  updateStartBar(Number(event.target.value));
+                }}
+                onFocus={() => {
+                  setIsEditingBar(true);
+                }}
+                onBlur={() => {
+                  setIsEditingBar(false);
+                  commitStartBar();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    commitStartBar();
+                  }
+                }}
+                disabled={!isReady}
+              />
+            </div>
             <small>
-              小節 {engineState.currentBar} / {engineState.maxBar}
+              えらんだ小節: {engineState.selectedStartBar}（{formatSec(engineState.selectedStartSec)}）
             </small>
           </div>
-        </div>
 
-        <div className="position-picker">
-          <span className="label">ここから再生する小節</span>
-          <div className="position-inputs">
-            <input
-              type="range"
-              min={0}
-              max={engineState.maxBar}
-              step={1}
-              value={pendingBar}
-              onChange={(event) => {
-                updateStartBar(Number(event.target.value));
-              }}
-              disabled={!isReady}
-            />
-            <input
-              type="number"
-              min={0}
-              max={engineState.maxBar}
-              step={1}
-              value={pendingBar}
-              onChange={(event) => {
-                updateStartBar(Number(event.target.value));
-              }}
-              disabled={!isReady}
-            />
-          </div>
-          <small>
-            えらんだ小節: {engineState.selectedStartBar}（{formatSec(engineState.selectedStartSec)}）
-          </small>
-        </div>
+          <button
+            type="button"
+            className="reset-button"
+            onClick={() => {
+              void runAction(() => engine.resetBpm());
+            }}
+            disabled={!isReady || engineState.bpm === BASE_BPM}
+          >
+            速さを80にもどす
+          </button>
+        </section>
 
-        <button
-          type="button"
-          className="reset-button"
-          onClick={() => {
-            void runAction(() => engine.resetBpm());
-          }}
-          disabled={!isReady || engineState.bpm === BASE_BPM}
-        >
-          速さを80にもどす
-        </button>
+        <section className="tracks-panel">
+          <h2>パートごとの音</h2>
+          <div className="track-list">
+            {engineState.tracks.map((track) => (
+              <article key={track.id} className="track-row">
+                <header>
+                  <strong>{track.label}</strong>
+                </header>
 
-        <h2>パートごとの音</h2>
-        <div className="track-list">
-          {engineState.tracks.map((track) => (
-            <article key={track.id} className="track-row">
-              <header>
-                <strong>{track.label}</strong>
-              </header>
-
-              <div className="track-actions">
-                <button
-                  type="button"
-                  className={track.mute ? 'active' : ''}
-                  onClick={() => handleToggleMute(track.id)}
-                  disabled={!isReady}
-                >
-                  {track.mute ? '消音中' : '音を消す'}
-                </button>
-                <button
-                  type="button"
-                  className={track.solo ? 'active' : ''}
-                  onClick={() => handleToggleSolo(track.id)}
-                  disabled={!isReady}
-                >
-                  {track.solo ? 'これだけ聞く中' : 'これだけ聞く'}
-                </button>
-                <label>
-                  音量
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={track.volume}
-                    onChange={(event) => {
-                      handleVolumeChange(track.id, Number(event.target.value));
-                    }}
+                <div className="track-actions">
+                  <button
+                    type="button"
+                    className={track.mute ? 'active' : ''}
+                    onClick={() => handleToggleMute(track.id)}
                     disabled={!isReady}
-                  />
-                </label>
-              </div>
-            </article>
-          ))}
-        </div>
+                  >
+                    {track.mute ? '消音中' : '音を消す'}
+                  </button>
+                  <button
+                    type="button"
+                    className={track.solo ? 'active' : ''}
+                    onClick={() => handleToggleSolo(track.id)}
+                    disabled={!isReady}
+                  >
+                    {track.solo ? 'これだけ聞く中' : 'これだけ聞く'}
+                  </button>
+                  <label>
+                    音量
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={track.volume}
+                      onChange={(event) => {
+                        handleVolumeChange(track.id, Number(event.target.value));
+                      }}
+                      disabled={!isReady}
+                    />
+                  </label>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
 
         {error && <p className="error">{error}</p>}
       </section>

@@ -5,5 +5,4 @@ dist
 *.tsbuildinfo
 ui-check.png
 ui-check-latest.png
-public/audio/*.mp3
 .codex/
