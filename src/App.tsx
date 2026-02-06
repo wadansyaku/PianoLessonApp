@@ -16,6 +16,7 @@ const formatSec = (value: number): string => {
 const App = (): JSX.Element => {
   const engine = useMemo(() => createAudioEngine(), []);
   const [engineState, setEngineState] = useState(() => engine.getState());
+  const [pendingBar, setPendingBar] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const refreshState = useCallback(() => {
@@ -25,7 +26,7 @@ const App = (): JSX.Element => {
   useEffect(() => {
     const timer = window.setInterval(() => {
       setEngineState(engine.getState());
-    }, 120);
+    }, 90);
 
     return () => {
       window.clearInterval(timer);
@@ -46,6 +47,20 @@ const App = (): JSX.Element => {
     [refreshState]
   );
 
+  useEffect(() => {
+    void runAction(() => engine.init());
+  }, [engine, runAction]);
+
+  useEffect(() => {
+    setPendingBar(engineState.selectedStartBar);
+  }, [engineState.selectedStartBar]);
+
+  useEffect(() => {
+    if (engineState.playing) {
+      setPendingBar(engineState.currentBar);
+    }
+  }, [engineState.playing, engineState.currentBar]);
+
   const handleToggleMute = (trackId: TrackId): void => {
     engine.toggleMute(trackId);
     refreshState();
@@ -61,26 +76,27 @@ const App = (): JSX.Element => {
     refreshState();
   };
 
+  const updateStartBar = (rawValue: number): void => {
+    if (!isReady || !Number.isFinite(rawValue)) {
+      return;
+    }
+
+    const next = Math.min(engineState.maxBar, Math.max(0, Math.round(rawValue)));
+    setPendingBar(next);
+    void runAction(() => engine.setStartBar(next));
+  };
+
   const isReady = engineState.initialized && !engineState.loading;
 
   return (
     <main className="app-shell">
       <section className="card">
-        <h1>Piano Lesson MVP</h1>
+        <h1>練習プレイヤー</h1>
         <p className="subtext">
-          StartでAudioContextを初期化し、5トラックを同期再生します。BPM変更時は同一音楽位置から再開します。
+          ページを開くと自動で準備します。小節をえらんで、その場所から再生できます。
         </p>
 
         <div className="transport-row">
-          <button
-            type="button"
-            onClick={() => {
-              void runAction(() => engine.init());
-            }}
-            disabled={engineState.initialized || engineState.loading}
-          >
-            {engineState.loading ? 'Starting...' : 'Start'}
-          </button>
           <button
             type="button"
             onClick={() => {
@@ -88,7 +104,7 @@ const App = (): JSX.Element => {
             }}
             disabled={!isReady || engineState.playing}
           >
-            Play
+            再生
           </button>
           <button
             type="button"
@@ -98,7 +114,7 @@ const App = (): JSX.Element => {
             }}
             disabled={!isReady || !engineState.playing}
           >
-            Pause
+            一時停止
           </button>
           <button
             type="button"
@@ -108,13 +124,13 @@ const App = (): JSX.Element => {
             }}
             disabled={!isReady || (!engineState.playing && engineState.currentInputSec === 0)}
           >
-            Stop
+            最初に戻す
           </button>
         </div>
 
         <div className="status-grid">
           <div>
-            <span className="label">BPM</span>
+            <span className="label">速さ（BPM）</span>
             <div className="bpm-controls">
               <button
                 type="button"
@@ -139,16 +155,45 @@ const App = (): JSX.Element => {
           </div>
 
           <div>
-            <span className="label">Tempo Ratio</span>
-            <strong>{engineState.tempoRatio.toFixed(2)}</strong>
-          </div>
-
-          <div>
-            <span className="label">Position</span>
+            <span className="label">いまの場所</span>
             <strong>
               {formatSec(engineState.currentInputSec)} / {formatSec(engineState.durationSec)}
             </strong>
+            <small>
+              小節 {engineState.currentBar} / {engineState.maxBar}
+            </small>
           </div>
+        </div>
+
+        <div className="position-picker">
+          <span className="label">ここから再生する小節</span>
+          <div className="position-inputs">
+            <input
+              type="range"
+              min={0}
+              max={engineState.maxBar}
+              step={1}
+              value={pendingBar}
+              onChange={(event) => {
+                updateStartBar(Number(event.target.value));
+              }}
+              disabled={!isReady}
+            />
+            <input
+              type="number"
+              min={0}
+              max={engineState.maxBar}
+              step={1}
+              value={pendingBar}
+              onChange={(event) => {
+                updateStartBar(Number(event.target.value));
+              }}
+              disabled={!isReady}
+            />
+          </div>
+          <small>
+            えらんだ小節: {engineState.selectedStartBar}（{formatSec(engineState.selectedStartSec)}）
+          </small>
         </div>
 
         <button
@@ -159,16 +204,15 @@ const App = (): JSX.Element => {
           }}
           disabled={!isReady || engineState.bpm === BASE_BPM}
         >
-          Reset BPM=80
+          速さを80にもどす
         </button>
 
-        <h2>Tracks</h2>
+        <h2>パートごとの音</h2>
         <div className="track-list">
           {engineState.tracks.map((track) => (
             <article key={track.id} className="track-row">
               <header>
                 <strong>{track.label}</strong>
-                <small>gain {track.effectiveGain.toFixed(2)}</small>
               </header>
 
               <div className="track-actions">
@@ -178,7 +222,7 @@ const App = (): JSX.Element => {
                   onClick={() => handleToggleMute(track.id)}
                   disabled={!isReady}
                 >
-                  {track.mute ? 'Muted' : 'Mute'}
+                  {track.mute ? '消音中' : '音を消す'}
                 </button>
                 <button
                   type="button"
@@ -186,10 +230,10 @@ const App = (): JSX.Element => {
                   onClick={() => handleToggleSolo(track.id)}
                   disabled={!isReady}
                 >
-                  {track.solo ? 'Solo On' : 'Solo'}
+                  {track.solo ? 'これだけ聞く中' : 'これだけ聞く'}
                 </button>
                 <label>
-                  Vol
+                  音量
                   <input
                     type="range"
                     min={0}

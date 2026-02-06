@@ -4,3 +4,6 @@ dist
 .DS_Store
 *.tsbuildinfo
 ui-check.png
+ui-check-latest.png
+public/audio/*.mp3
+.codex/

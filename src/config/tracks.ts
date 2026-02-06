@@ -15,31 +15,31 @@ export interface TrackDefinition {
 export const TRACKS: TrackDefinition[] = [
   {
     id: 'violin',
-    label: 'Violin',
+    label: 'バイオリン',
     url: '/audio/violin.mp3',
     initialVolume: 0.85
   },
   {
     id: 'cello',
-    label: 'Cello',
+    label: 'チェロ',
     url: '/audio/cello.mp3',
     initialVolume: 0.85
   },
   {
     id: 'piano_r',
-    label: 'Piano (R)',
+    label: 'ピアノ（右手）',
     url: '/audio/piano_r.mp3',
     initialVolume: 0.9
   },
   {
     id: 'piano_l',
-    label: 'Piano (L)',
+    label: 'ピアノ（左手）',
     url: '/audio/piano_l.mp3',
     initialVolume: 0.9
   },
   {
     id: 'click',
-    label: 'Click',
+    label: 'クリック',
     url: '/audio/click.mp3',
     initialVolume: 0.55
   }

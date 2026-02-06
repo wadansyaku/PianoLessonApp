@@ -1129,6 +1129,9 @@ var SoundTouchWorklet = function (_AudioWorkletProcesso) {
     _this = _callSuper(this, SoundTouchWorklet);
     _this.bufferSize = 128;
     _this._samples = new Float32Array(_this.bufferSize * 2);
+    _this._processedSamples = new Float32Array(_this.bufferSize * 2);
+    _this._lastLeft = 0;
+    _this._lastRight = 0;
     _this._pipe = new SoundTouch();
     return _this;
   }
@@ -1143,6 +1146,7 @@ var SoundTouchWorklet = function (_AudioWorkletProcesso) {
       var leftOutput = outputs[0][0];
       var rightOutput = outputs[0].length > 1 ? outputs[0][1] : outputs[0][0];
       var samples = this._samples;
+      var processedSamples = this._processedSamples;
       if (!leftOutput || !leftOutput.length) return false;
       var rate = (_parameters$rate$ = parameters.rate[0]) !== null && _parameters$rate$ !== void 0 ? _parameters$rate$ : parameters.rate;
       var tempo = (_parameters$tempo$ = parameters.tempo[0]) !== null && _parameters$tempo$ !== void 0 ? _parameters$tempo$ : parameters.tempo;
@@ -1157,14 +1161,24 @@ var SoundTouchWorklet = function (_AudioWorkletProcesso) {
       }
       this._pipe.inputBuffer.putSamples(samples, 0, leftInput.length);
       this._pipe.process();
-      var processedSamples = new Float32Array(leftInput.length * 2);
-      this._pipe.outputBuffer.receiveSamples(processedSamples, leftOutput.length);
+      var availableFrames = this._pipe.outputBuffer.frameCount;
+      var framesToRead = Math.min(leftOutput.length, availableFrames);
+      if (framesToRead > 0) {
+        this._pipe.outputBuffer.receiveSamples(processedSamples, framesToRead);
+      }
       for (var _i = 0; _i < leftInput.length; _i++) {
-        leftOutput[_i] = processedSamples[_i * 2];
-        rightOutput[_i] = processedSamples[_i * 2 + 1];
+        if (_i < framesToRead) {
+          leftOutput[_i] = processedSamples[_i * 2];
+          rightOutput[_i] = processedSamples[_i * 2 + 1];
+          this._lastLeft = leftOutput[_i];
+          this._lastRight = rightOutput[_i];
+        } else {
+          leftOutput[_i] = this._lastLeft;
+          rightOutput[_i] = this._lastRight;
+        }
         if (isNaN(leftOutput[_i]) || isNaN(rightOutput[_i])) {
-          leftOutput[_i] = 0;
-          rightOutput[_i] = 0;
+          leftOutput[_i] = this._lastLeft;
+          rightOutput[_i] = this._lastRight;
         }
       }
       return true;

@@ -17,9 +17,21 @@ interface InternalTrackState {
   effectiveGain: number;
 }
 
+interface BeatPoint {
+  timeSec: number;
+  strength: number;
+  brightness: number;
+}
+
+const TARGET_LAST_BAR = 110;
+const TARGET_BAR_COUNT = TARGET_LAST_BAR + 1;
+const MASTER_GAIN_TARGET = 0.55;
+const BPM_TRANSITION_SEC = 0.08;
+
 export class AudioEngine {
   private audioCtx: AudioContext | null = null;
   private mixGainNode: GainNode | null = null;
+  private postFilterNode: BiquadFilterNode | null = null;
   private masterGainNode: GainNode | null = null;
   private stretchNode: AudioWorkletNode | null = null;
 
@@ -42,6 +54,9 @@ export class AudioEngine {
   private playbackRunId = 0;
   private endedTrackIds = new Set<TrackId>();
 
+  private barStartSec: number[] = [0];
+  private selectedStartBar = 0;
+
   constructor(private readonly tracks: TrackDefinition[] = TRACKS) {
     for (const track of tracks) {
       this.trackState.set(track.id, {
@@ -55,14 +70,21 @@ export class AudioEngine {
   }
 
   getState(): AudioEngineState {
+    const currentInputSec = this.getCurrentInputSec();
+    const maxBar = this.getMaxBar();
+    const selectedStartBar = this.clampBarNumber(this.selectedStartBar);
+
     return {
       initialized: this.initialized,
       loading: this.loading,
       playing: this.playing,
       bpm: this.bpm,
-      tempoRatio: this.getTempoRatio(),
-      currentInputSec: this.getCurrentInputSec(),
+      currentInputSec,
       durationSec: this.durationSec,
+      currentBar: this.findBarByInputSec(currentInputSec),
+      selectedStartBar,
+      selectedStartSec: this.getBarStartSec(selectedStartBar),
+      maxBar,
       tracks: this.tracks.map((track) => {
         const state = this.trackState.get(track.id)!;
         return {
@@ -88,21 +110,27 @@ export class AudioEngine {
       await this.audioCtx.audioWorklet.addModule('/worklets/soundtouch-worklet.js');
 
       this.mixGainNode = this.audioCtx.createGain();
+      this.postFilterNode = this.audioCtx.createBiquadFilter();
+      this.postFilterNode.type = 'lowpass';
+      this.postFilterNode.frequency.value = 14000;
+      this.postFilterNode.Q.value = 0.65;
       this.masterGainNode = this.audioCtx.createGain();
-      this.masterGainNode.gain.value = 0.8;
+      this.masterGainNode.gain.value = MASTER_GAIN_TARGET;
 
       this.stretchNode = new AudioWorkletNode(this.audioCtx, 'soundtouch-processor', {
         numberOfInputs: 1,
         numberOfOutputs: 1,
         outputChannelCount: [2],
         parameterData: {
-          tempo: this.getTempoRatio(),
-          pitch: 1
+          rate: 1,
+          tempo: 1,
+          pitch: 1 / this.getTempoRatio()
         }
       });
 
       this.mixGainNode.connect(this.stretchNode);
-      this.stretchNode.connect(this.masterGainNode);
+      this.stretchNode.connect(this.postFilterNode);
+      this.postFilterNode.connect(this.masterGainNode);
       this.masterGainNode.connect(this.audioCtx.destination);
 
       for (const track of this.tracks) {
@@ -113,6 +141,7 @@ export class AudioEngine {
 
       this.applyTrackMix();
       await this.loadTrackBuffers();
+      this.buildBarMapFromClick();
 
       this.initialized = true;
     } catch (error) {
@@ -141,84 +170,52 @@ export class AudioEngine {
     }
 
     const offsetSec = this.clampInputOffset(this.pausedInputOffsetSec);
-    if (this.durationSec > 0 && offsetSec >= this.durationSec) {
-      this.pausedInputOffsetSec = 0;
-      this.startInputOffsetSec = 0;
-    }
+    const resolvedOffset =
+      this.durationSec > 0 && offsetSec >= this.durationSec
+        ? this.getBarStartSec(this.selectedStartBar)
+        : offsetSec;
 
-    const resolvedOffset = this.clampInputOffset(this.pausedInputOffsetSec);
     this.stopCurrentSources();
-
-    const runId = ++this.playbackRunId;
-    this.endedTrackIds = new Set<TrackId>();
-
-    for (const track of this.tracks) {
-      const buffer = this.buffers.get(track.id);
-      const trackGainNode = this.trackGainNodes.get(track.id);
-      if (!buffer || !trackGainNode) {
-        continue;
-      }
-
-      if (resolvedOffset >= buffer.duration) {
-        this.endedTrackIds.add(track.id);
-        continue;
-      }
-
-      const source = this.audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(trackGainNode);
-      source.onended = () => {
-        this.activeSources.delete(track.id);
-
-        if (runId !== this.playbackRunId || !this.playing) {
-          return;
-        }
-
-        this.endedTrackIds.add(track.id);
-        if (this.endedTrackIds.size === this.tracks.length) {
-          this.playing = false;
-          this.startInputOffsetSec = 0;
-          this.pausedInputOffsetSec = 0;
-        }
-      };
-
-      source.start(0, resolvedOffset);
-      this.activeSources.set(track.id, source);
-    }
-
-    if (this.activeSources.size === 0) {
-      this.playing = false;
-      this.pausedInputOffsetSec = 0;
-      this.startInputOffsetSec = 0;
-      return;
-    }
-
-    this.setTempoParameters();
-
-    this.startContextSec = this.audioCtx.currentTime;
-    this.startInputOffsetSec = resolvedOffset;
-    this.playing = true;
+    this.startSourcesAtOffset(resolvedOffset, {
+      scheduledStartSec: this.audioCtx.currentTime + 0.004,
+      fadeIn: true
+    });
   }
 
   pause(): void {
-    if (!this.playing) {
+    if (!this.playing || !this.audioCtx) {
       return;
     }
 
     const currentInputSec = this.getCurrentInputSec();
+
+    if (this.masterGainNode) {
+      const now = this.audioCtx.currentTime;
+      this.masterGainNode.gain.cancelScheduledValues(now);
+      this.masterGainNode.gain.setValueAtTime(0.0001, now);
+    }
+
     this.stopCurrentSources();
 
     this.playing = false;
     this.pausedInputOffsetSec = this.clampInputOffset(currentInputSec);
     this.startInputOffsetSec = this.pausedInputOffsetSec;
+    this.selectedStartBar = this.findBarByInputSec(this.pausedInputOffsetSec);
   }
 
   stop(): void {
     this.stopCurrentSources();
 
     this.playing = false;
-    this.pausedInputOffsetSec = 0;
-    this.startInputOffsetSec = 0;
+    this.selectedStartBar = 0;
+    this.pausedInputOffsetSec = this.getBarStartSec(0);
+    this.startInputOffsetSec = this.pausedInputOffsetSec;
+
+    if (this.audioCtx && this.masterGainNode) {
+      const now = this.audioCtx.currentTime;
+      this.masterGainNode.gain.cancelScheduledValues(now);
+      this.masterGainNode.gain.setValueAtTime(MASTER_GAIN_TARGET, now);
+    }
   }
 
   async setBpm(nextBpm: number): Promise<void> {
@@ -227,23 +224,18 @@ export class AudioEngine {
       return;
     }
 
-    const wasPlaying = this.playing;
-    let resumeOffset = this.pausedInputOffsetSec;
-
-    if (wasPlaying) {
-      resumeOffset = this.getCurrentInputSec();
-      this.stopCurrentSources();
-      this.playing = false;
-      this.pausedInputOffsetSec = this.clampInputOffset(resumeOffset);
-      this.startInputOffsetSec = this.pausedInputOffsetSec;
+    if (this.playing && this.audioCtx) {
+      const currentInputSec = this.getCurrentInputSec();
+      this.startContextSec = this.audioCtx.currentTime;
+      this.startInputOffsetSec = this.clampInputOffset(currentInputSec);
+      this.pausedInputOffsetSec = this.startInputOffsetSec;
+      this.selectedStartBar = this.findBarByInputSec(this.startInputOffsetSec);
     }
 
     this.bpm = normalized;
-    this.setTempoParameters();
-
-    if (wasPlaying) {
-      await this.play();
-    }
+    const transitionSec = this.playing ? BPM_TRANSITION_SEC : 0;
+    this.setTempoParameters(transitionSec);
+    this.setActiveSourcePlaybackRate(transitionSec);
   }
 
   async changeBpm(delta: number): Promise<void> {
@@ -252,6 +244,25 @@ export class AudioEngine {
 
   async resetBpm(): Promise<void> {
     await this.setBpm(BASE_BPM);
+  }
+
+  async setStartBar(bar: number): Promise<void> {
+    const normalizedBar = this.clampBarNumber(Math.round(bar));
+    this.selectedStartBar = normalizedBar;
+
+    const nextOffset = this.getBarStartSec(normalizedBar);
+    this.pausedInputOffsetSec = nextOffset;
+    this.startInputOffsetSec = nextOffset;
+
+    if (this.playing && this.audioCtx) {
+      await this.fadeMasterOut(0.01);
+      this.stopCurrentSources();
+      this.playing = false;
+      this.startSourcesAtOffset(nextOffset, {
+        scheduledStartSec: this.audioCtx.currentTime + 0.005,
+        fadeIn: true
+      });
+    }
   }
 
   toggleMute(trackId: TrackId): void {
@@ -309,6 +320,366 @@ export class AudioEngine {
     this.durationSec = loaded.reduce((max, [, buffer]) => Math.max(max, buffer.duration), 0);
   }
 
+  private buildBarMapFromClick(): void {
+    const clickBuffer = this.buffers.get('click');
+    if (!clickBuffer) {
+      this.barStartSec = [0];
+      this.selectedStartBar = 0;
+      return;
+    }
+
+    const beats = this.detectBeatPoints(clickBuffer);
+    const beatTimes = beats.map((beat) => beat.timeSec);
+
+    if (beatTimes.length < 220) {
+      this.barStartSec = this.buildFallbackBarStarts(clickBuffer.duration);
+      this.selectedStartBar = this.clampBarNumber(this.selectedStartBar);
+      return;
+    }
+
+    const starts = this.deriveBarStartsFromBeats(beats, clickBuffer.duration);
+    this.barStartSec = starts.length > 0 ? starts : this.buildFallbackBarStarts(clickBuffer.duration);
+    this.selectedStartBar = this.clampBarNumber(this.selectedStartBar);
+  }
+
+  private detectBeatPoints(buffer: AudioBuffer): BeatPoint[] {
+    const sampleRate = buffer.sampleRate;
+    const channels = buffer.numberOfChannels;
+    const hop = 256;
+    const windowSec = 0.015;
+
+    const length = buffer.length;
+    const frameCount = Math.floor(length / hop);
+
+    if (frameCount <= 0) {
+      return [];
+    }
+
+    const envelope = new Float32Array(frameCount);
+
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      const base = frame * hop;
+      let sum = 0;
+
+      for (let channel = 0; channel < channels; channel += 1) {
+        const data = buffer.getChannelData(channel);
+
+        for (let i = 0; i < hop; i += 1) {
+          sum += Math.abs(data[base + i] ?? 0);
+        }
+      }
+
+      envelope[frame] = sum / (hop * channels);
+    }
+
+    const smooth = new Float32Array(frameCount);
+    let prev = envelope[0];
+    const alpha = 0.28;
+
+    for (let i = 0; i < frameCount; i += 1) {
+      prev = alpha * envelope[i] + (1 - alpha) * prev;
+      smooth[i] = prev;
+    }
+
+    const onset = new Float32Array(frameCount);
+    for (let i = 1; i < frameCount; i += 1) {
+      onset[i] = Math.max(0, smooth[i] - smooth[i - 1]);
+    }
+
+    const values = Array.from(onset).sort((a, b) => a - b);
+    const p90 = values[Math.floor(values.length * 0.9)] ?? 0;
+    const p99 = values[Math.floor(values.length * 0.99)] ?? p90;
+    const threshold = p90 + (p99 - p90) * 0.24;
+
+    const minGapSec = 0.22;
+    const minGapFrames = Math.max(1, Math.floor((sampleRate * minGapSec) / hop));
+
+    const peaks: number[] = [];
+
+    for (let i = 1; i < onset.length - 1; i += 1) {
+      if (onset[i] < threshold || onset[i] < onset[i - 1] || onset[i] < onset[i + 1]) {
+        continue;
+      }
+
+      const last = peaks[peaks.length - 1];
+      if (last !== undefined && i - last < minGapFrames) {
+        if (onset[i] > onset[last]) {
+          peaks[peaks.length - 1] = i;
+        }
+        continue;
+      }
+
+      peaks.push(i);
+    }
+
+    const beats: BeatPoint[] = [];
+    const radius = Math.max(1, Math.floor(windowSec * sampleRate));
+
+    for (const frame of peaks) {
+      const center = frame * hop;
+      const start = Math.max(0, center - radius);
+      const end = Math.min(length - 1, center + radius);
+
+      let absSum = 0;
+      let diffSum = 0;
+      let count = 0;
+
+      for (let channel = 0; channel < channels; channel += 1) {
+        const data = buffer.getChannelData(channel);
+
+        for (let i = start + 1; i <= end; i += 1) {
+          const value = data[i] ?? 0;
+          const prevValue = data[i - 1] ?? 0;
+          absSum += Math.abs(value);
+          diffSum += Math.abs(value - prevValue);
+          count += 1;
+        }
+      }
+
+      if (count === 0) {
+        continue;
+      }
+
+      beats.push({
+        timeSec: center / sampleRate,
+        strength: onset[frame],
+        brightness: diffSum / (absSum + 1e-6)
+      });
+    }
+
+    if (beats.length === 0 || beats[0].timeSec > 0.05) {
+      beats.unshift({
+        timeSec: 0,
+        strength: 0,
+        brightness: 0
+      });
+    } else {
+      beats[0].timeSec = 0;
+    }
+
+    return beats;
+  }
+
+  private deriveBarStartsFromBeats(beats: BeatPoint[], durationSec: number): number[] {
+    const beatTimes = beats.map((beat) => beat.timeSec);
+    const beatStrength = this.normalize(beats.map((beat) => beat.strength));
+    const beatBrightness = this.normalize(beats.map((beat) => beat.brightness));
+
+    const startScore = beatStrength.map((value, index) => value * 0.72 + beatBrightness[index] * 0.28);
+
+    const intervals: number[] = [];
+    for (let i = 1; i < beatTimes.length; i += 1) {
+      const delta = beatTimes[i] - beatTimes[i - 1];
+      if (delta > 0.2 && delta < 1.6) {
+        intervals.push(delta);
+      }
+    }
+
+    const medianBeatSec = this.median(intervals) ?? 60 / BASE_BPM;
+
+    const beatCount = beatTimes.length;
+    const maxPossibleBars = Math.floor((beatCount - 1) / 2) + 1;
+    const targetBarCount = Math.min(TARGET_BAR_COUNT, Math.max(2, maxPossibleBars));
+
+    const impossible = -1e9;
+    const dp = Array.from({ length: targetBarCount }, () => new Float64Array(beatCount).fill(impossible));
+    const prev = Array.from({ length: targetBarCount }, () => new Int32Array(beatCount).fill(-1));
+
+    dp[0][0] = 0;
+
+    for (let bar = 0; bar < targetBarCount - 1; bar += 1) {
+      for (let currentBeat = 0; currentBeat < beatCount; currentBeat += 1) {
+        const currentScore = dp[bar][currentBeat];
+        if (currentScore <= impossible / 2) {
+          continue;
+        }
+
+        for (const step of [4, 2]) {
+          const nextBeat = currentBeat + step;
+          if (nextBeat >= beatCount) {
+            continue;
+          }
+
+          const barDurationSec = beatTimes[nextBeat] - beatTimes[currentBeat];
+          const expectedSec = medianBeatSec * step;
+          const durationPenalty = -Math.abs(barDurationSec - expectedSec) / Math.max(expectedSec * 0.45, 0.12);
+          const meterPenalty = step === 4 ? 0 : -0.24;
+          const score = currentScore + startScore[nextBeat] + durationPenalty + meterPenalty;
+
+          if (score > dp[bar + 1][nextBeat]) {
+            dp[bar + 1][nextBeat] = score;
+            prev[bar + 1][nextBeat] = currentBeat;
+          }
+        }
+      }
+    }
+
+    const lastBar = targetBarCount - 1;
+    let bestEndBeat = -1;
+    let bestScore = impossible;
+
+    for (let beatIndex = 0; beatIndex < beatCount; beatIndex += 1) {
+      const remainingBeats = (beatCount - 1) - beatIndex;
+      const terminalPenalty = -Math.abs(remainingBeats - 4) * 0.045;
+      const score = dp[lastBar][beatIndex] + terminalPenalty;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestEndBeat = beatIndex;
+      }
+    }
+
+    if (bestEndBeat < 0) {
+      return this.buildFallbackBarStarts(durationSec);
+    }
+
+    const beatIndexStarts = new Array<number>(targetBarCount).fill(0);
+    beatIndexStarts[lastBar] = bestEndBeat;
+
+    for (let bar = lastBar; bar > 0; bar -= 1) {
+      const previous = prev[bar][beatIndexStarts[bar]];
+      if (previous < 0) {
+        return this.buildFallbackBarStarts(durationSec);
+      }
+      beatIndexStarts[bar - 1] = previous;
+    }
+
+    const starts = beatIndexStarts.map((index) => beatTimes[index]);
+    starts[0] = 0;
+
+    const deduped: number[] = [];
+    for (const value of starts) {
+      if (deduped.length === 0 || value - deduped[deduped.length - 1] > 0.08) {
+        deduped.push(value);
+      }
+    }
+
+    const fallbackBarSec = medianBeatSec * 4;
+    while (deduped.length < TARGET_BAR_COUNT) {
+      const last = deduped[deduped.length - 1] ?? 0;
+      const next = Math.min(durationSec, last + fallbackBarSec);
+      if (next <= last + 0.05) {
+        break;
+      }
+      deduped.push(next);
+    }
+
+    if (deduped.length > TARGET_BAR_COUNT) {
+      deduped.length = TARGET_BAR_COUNT;
+    }
+
+    return deduped;
+  }
+
+  private buildFallbackBarStarts(durationSec: number): number[] {
+    const bars: number[] = [];
+    const barSec = (60 / BASE_BPM) * 4;
+
+    for (let bar = 0; bar < TARGET_BAR_COUNT; bar += 1) {
+      const sec = Math.min(durationSec, bar * barSec);
+      if (bars.length === 0 || sec - bars[bars.length - 1] > 0.04) {
+        bars.push(sec);
+      }
+    }
+
+    return bars.length > 0 ? bars : [0];
+  }
+
+  private startSourcesAtOffset(
+    offsetSec: number,
+    options: {
+      scheduledStartSec: number;
+      fadeIn: boolean;
+    }
+  ): void {
+    if (!this.audioCtx) {
+      return;
+    }
+
+    const resolvedOffset = this.clampInputOffset(offsetSec);
+    const runId = ++this.playbackRunId;
+    this.endedTrackIds = new Set<TrackId>();
+
+    for (const track of this.tracks) {
+      const buffer = this.buffers.get(track.id);
+      const trackGainNode = this.trackGainNodes.get(track.id);
+      if (!buffer || !trackGainNode) {
+        continue;
+      }
+
+      if (resolvedOffset >= buffer.duration) {
+        this.endedTrackIds.add(track.id);
+        continue;
+      }
+
+      const source = this.audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.playbackRate.setValueAtTime(this.getTempoRatio(), options.scheduledStartSec);
+      source.connect(trackGainNode);
+      source.onended = () => {
+        this.activeSources.delete(track.id);
+
+        if (runId !== this.playbackRunId || !this.playing) {
+          return;
+        }
+
+        this.endedTrackIds.add(track.id);
+        if (this.endedTrackIds.size === this.tracks.length) {
+          this.playing = false;
+          this.selectedStartBar = 0;
+          this.startInputOffsetSec = this.getBarStartSec(0);
+          this.pausedInputOffsetSec = this.startInputOffsetSec;
+        }
+      };
+
+      source.start(options.scheduledStartSec, resolvedOffset);
+      this.activeSources.set(track.id, source);
+    }
+
+    if (this.activeSources.size === 0) {
+      this.playing = false;
+      this.selectedStartBar = 0;
+      this.pausedInputOffsetSec = this.getBarStartSec(0);
+      this.startInputOffsetSec = this.pausedInputOffsetSec;
+      return;
+    }
+
+    this.setTempoParameters();
+
+    if (this.masterGainNode) {
+      const now = this.audioCtx.currentTime;
+      const gain = this.masterGainNode.gain;
+      gain.cancelScheduledValues(now);
+
+      if (options.fadeIn) {
+        gain.setValueAtTime(0.0001, now);
+        gain.linearRampToValueAtTime(MASTER_GAIN_TARGET, options.scheduledStartSec + 0.02);
+      } else {
+        gain.setValueAtTime(MASTER_GAIN_TARGET, now);
+      }
+    }
+
+    this.startContextSec = options.scheduledStartSec;
+    this.startInputOffsetSec = resolvedOffset;
+    this.pausedInputOffsetSec = resolvedOffset;
+    this.selectedStartBar = this.findBarByInputSec(resolvedOffset);
+    this.playing = true;
+  }
+
+  private async fadeMasterOut(durationSec: number): Promise<void> {
+    if (!this.audioCtx || !this.masterGainNode) {
+      return;
+    }
+
+    const now = this.audioCtx.currentTime;
+    const gain = this.masterGainNode.gain;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(0.0001, now + durationSec);
+
+    await this.sleep((durationSec * 1000) + 2);
+  }
+
   private applyTrackMix(): void {
     const hasSolo = Array.from(this.trackState.values()).some((state) => state.solo);
     const now = this.audioCtx?.currentTime ?? 0;
@@ -332,20 +703,57 @@ export class AudioEngine {
     }
   }
 
-  private setTempoParameters(): void {
+  private setTempoParameters(transitionSec = 0): void {
     if (!this.stretchNode || !this.audioCtx) {
       return;
     }
 
+    const rateParam = this.stretchNode.parameters.get('rate');
     const tempoParam = this.stretchNode.parameters.get('tempo');
     const pitchParam = this.stretchNode.parameters.get('pitch');
+    const now = this.audioCtx.currentTime;
+    const targetPitch = 1 / this.getTempoRatio();
+
+    if (rateParam) {
+      rateParam.cancelScheduledValues(now);
+      rateParam.setValueAtTime(1, now);
+    }
 
     if (tempoParam) {
-      tempoParam.setValueAtTime(this.getTempoRatio(), this.audioCtx.currentTime);
+      tempoParam.cancelScheduledValues(now);
+      tempoParam.setValueAtTime(1, now);
     }
 
     if (pitchParam) {
-      pitchParam.setValueAtTime(1, this.audioCtx.currentTime);
+      pitchParam.cancelScheduledValues(now);
+      pitchParam.setValueAtTime(pitchParam.value, now);
+
+      if (transitionSec > 0) {
+        pitchParam.linearRampToValueAtTime(targetPitch, now + transitionSec);
+      } else {
+        pitchParam.setValueAtTime(targetPitch, now);
+      }
+    }
+  }
+
+  private setActiveSourcePlaybackRate(transitionSec = 0): void {
+    if (!this.audioCtx) {
+      return;
+    }
+
+    const now = this.audioCtx.currentTime;
+    const targetRate = this.getTempoRatio();
+
+    for (const source of this.activeSources.values()) {
+      const rateParam = source.playbackRate;
+      rateParam.cancelScheduledValues(now);
+      rateParam.setValueAtTime(rateParam.value, now);
+
+      if (transitionSec > 0) {
+        rateParam.linearRampToValueAtTime(targetRate, now + transitionSec);
+      } else {
+        rateParam.setValueAtTime(targetRate, now);
+      }
     }
   }
 
@@ -364,6 +772,45 @@ export class AudioEngine {
     return this.clampInputOffset(this.startInputOffsetSec + inputProgressSec);
   }
 
+  private findBarByInputSec(inputSec: number): number {
+    if (this.barStartSec.length <= 1) {
+      return 0;
+    }
+
+    let low = 0;
+    let high = this.barStartSec.length - 1;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const value = this.barStartSec[mid];
+
+      if (value <= inputSec) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    return this.clampBarNumber(high);
+  }
+
+  private getBarStartSec(bar: number): number {
+    const normalizedBar = this.clampBarNumber(bar);
+    return this.barStartSec[normalizedBar] ?? 0;
+  }
+
+  private getMaxBar(): number {
+    return this.clamp(
+      Math.min(TARGET_LAST_BAR, this.barStartSec.length - 1),
+      0,
+      TARGET_LAST_BAR
+    );
+  }
+
+  private clampBarNumber(bar: number): number {
+    return this.clamp(bar, 0, this.getMaxBar());
+  }
+
   private stopCurrentSources(): void {
     this.playbackRunId += 1;
     this.endedTrackIds.clear();
@@ -374,7 +821,7 @@ export class AudioEngine {
       try {
         source.stop();
       } catch {
-        // no-op: source may have already ended
+        // no-op: source may already have ended
       }
 
       source.disconnect();
@@ -401,6 +848,42 @@ export class AudioEngine {
     return Math.min(max, Math.max(min, value));
   }
 
+  private median(values: number[]): number | null {
+    if (values.length === 0) {
+      return null;
+    }
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+
+    if (sorted.length % 2 === 0) {
+      return (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    return sorted[mid];
+  }
+
+  private normalize(values: number[]): number[] {
+    if (values.length === 0) {
+      return [];
+    }
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    if (Math.abs(max - min) < 1e-9) {
+      return values.map(() => 0);
+    }
+
+    return values.map((value) => (value - min) / (max - min));
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
   private disposeNodes(): void {
     this.stopCurrentSources();
 
@@ -410,10 +893,12 @@ export class AudioEngine {
     this.trackGainNodes.clear();
 
     this.stretchNode?.disconnect();
+    this.postFilterNode?.disconnect();
     this.masterGainNode?.disconnect();
     this.mixGainNode?.disconnect();
 
     this.stretchNode = null;
+    this.postFilterNode = null;
     this.masterGainNode = null;
     this.mixGainNode = null;
 
@@ -431,6 +916,8 @@ export class AudioEngine {
     this.startContextSec = 0;
     this.startInputOffsetSec = 0;
     this.pausedInputOffsetSec = 0;
+    this.barStartSec = [0];
+    this.selectedStartBar = 0;
   }
 }
 

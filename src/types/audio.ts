@@ -15,8 +15,11 @@ export interface AudioEngineState {
   loading: boolean;
   playing: boolean;
   bpm: number;
-  tempoRatio: number;
   currentInputSec: number;
   durationSec: number;
+  currentBar: number;
+  selectedStartBar: number;
+  selectedStartSec: number;
+  maxBar: number;
   tracks: TrackRuntimeState[];
 }

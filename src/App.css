@@ -5,8 +5,8 @@
 }
 
 .card {
-  width: min(900px, 100%);
-  background: rgba(255, 255, 255, 0.85);
+  width: min(940px, 100%);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(29, 59, 96, 0.15);
   border-radius: 16px;
   padding: 20px;
@@ -23,6 +23,12 @@ h2 {
   margin-top: 18px;
   margin-bottom: 10px;
   font-size: 1.05rem;
+}
+
+small {
+  display: block;
+  margin-top: 4px;
+  color: #466186;
 }
 
 .subtext {
@@ -62,7 +68,7 @@ button.active {
 .status-grid {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
 }
 
@@ -84,6 +90,29 @@ button.active {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.position-picker {
+  margin-top: 12px;
+  border: 1px solid rgba(54, 89, 130, 0.2);
+  border-radius: 12px;
+  background: rgba(245, 250, 255, 0.86);
+  padding: 10px;
+}
+
+.position-inputs {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  gap: 8px;
+  align-items: center;
+}
+
+.position-inputs input[type='number'] {
+  width: 100%;
+  border: 1px solid rgba(84, 112, 149, 0.5);
+  border-radius: 8px;
+  padding: 6px;
+  color: #0f2846;
 }
 
 .reset-button {
@@ -142,5 +171,9 @@ input[type='range'] {
 
   .card {
     padding: 14px;
+  }
+
+  .position-inputs {
+    grid-template-columns: 1fr;
   }
 }
