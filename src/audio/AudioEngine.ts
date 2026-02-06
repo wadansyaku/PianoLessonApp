@@ -23,10 +23,22 @@ interface BeatPoint {
   brightness: number;
 }
 
+type AudioContextCtor = new (contextOptions?: AudioContextOptions) => AudioContext;
+
+interface WindowWithWebkitAudio extends Window {
+  AudioContext?: AudioContextCtor;
+  webkitAudioContext?: AudioContextCtor;
+}
+
 const TARGET_LAST_BAR = 110;
 const TARGET_BAR_COUNT = TARGET_LAST_BAR + 1;
 const MASTER_GAIN_TARGET = 0.55;
 const BPM_TRANSITION_SEC = 0.08;
+
+const resolveAudioContextCtor = (): AudioContextCtor | null => {
+  const win = window as WindowWithWebkitAudio;
+  return win.AudioContext ?? win.webkitAudioContext ?? null;
+};
 
 export class AudioEngine {
   private audioCtx: AudioContext | null = null;
@@ -106,7 +118,25 @@ export class AudioEngine {
     this.loading = true;
 
     try {
-      this.audioCtx = new AudioContext();
+      const AudioContextClass = resolveAudioContextCtor();
+      if (!AudioContextClass) {
+        throw new Error(
+          'このブラウザでは音声の再生機能に対応していません。SafariかChromeで開いてください。'
+        );
+      }
+
+      this.audioCtx = new AudioContextClass();
+      if (!this.audioCtx.audioWorklet || typeof this.audioCtx.audioWorklet.addModule !== 'function') {
+        throw new Error(
+          'このブラウザでは高音質の音声処理に対応していません。SafariかChromeの最新版で開いてください。'
+        );
+      }
+      if (typeof AudioWorkletNode === 'undefined') {
+        throw new Error(
+          'このブラウザでは音声処理ノードに対応していません。SafariかChromeの最新版で開いてください。'
+        );
+      }
+
       await this.audioCtx.audioWorklet.addModule('/worklets/soundtouch-worklet.js');
 
       this.mixGainNode = this.audioCtx.createGain();
