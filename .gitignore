@@ -2,3 +2,5 @@ node_modules
 dist
 .vite
 .DS_Store
+*.tsbuildinfo
+ui-check.png
