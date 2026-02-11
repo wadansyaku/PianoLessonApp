@@ -198,20 +198,20 @@ const App = (): JSX.Element => {
               <button
                 type="button"
                 onClick={() => {
-                  commitBarDirectly(0);
-                }}
-                disabled={!isReady || pendingBar <= 0}
-              >
-                先頭
-              </button>
-              <button
-                type="button"
-                onClick={() => {
                   moveBarBy(-8);
                 }}
                 disabled={!isReady || pendingBar <= 0}
               >
                 -8
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveBarBy(-4);
+                }}
+                disabled={!isReady || pendingBar <= 0}
+              >
+                -4
               </button>
               <button
                 type="button"
@@ -234,20 +234,20 @@ const App = (): JSX.Element => {
               <button
                 type="button"
                 onClick={() => {
+                  moveBarBy(4);
+                }}
+                disabled={!isReady || pendingBar >= engineState.maxBar}
+              >
+                +4
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   moveBarBy(8);
                 }}
                 disabled={!isReady || pendingBar >= engineState.maxBar}
               >
                 +8
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  commitBarDirectly(engineState.maxBar);
-                }}
-                disabled={!isReady || pendingBar >= engineState.maxBar}
-              >
-                最後
               </button>
             </div>
             <div className="position-inputs">
