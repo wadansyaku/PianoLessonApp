@@ -125,6 +125,17 @@ button.active {
   padding: 7px;
 }
 
+.bar-jump-buttons {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.bar-jump-buttons button {
+  min-height: 34px;
+}
+
 .position-inputs {
   display: grid;
   grid-template-columns: 1fr 82px;
@@ -132,11 +143,51 @@ button.active {
   align-items: center;
 }
 
+.position-inputs input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  height: 30px;
+  cursor: pointer;
+}
+
+.position-inputs input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(66, 99, 138, 0.2);
+}
+
+.position-inputs input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border-radius: 50%;
+  border: 1px solid rgba(49, 82, 120, 0.45);
+  background: #f7fbff;
+}
+
+.position-inputs input[type='range']::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(66, 99, 138, 0.2);
+}
+
+.position-inputs input[type='range']::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(49, 82, 120, 0.45);
+  background: #f7fbff;
+}
+
 .position-inputs input[type='number'] {
   width: 100%;
   border: 1px solid rgba(84, 112, 149, 0.5);
   border-radius: 7px;
+  min-height: 34px;
   padding: 5px 6px;
+  font-size: 1em;
   color: #0f2846;
   min-width: 0;
 }
@@ -231,6 +282,15 @@ input[type='range'] {
 @media (max-width: 640px) {
   .card {
     border-radius: 12px;
+  }
+
+  .bar-jump-buttons {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .bar-jump-buttons button {
+    min-height: 32px;
+    padding: 4px 6px;
   }
 
   .position-inputs {

@@ -77,13 +77,15 @@ const App = (): JSX.Element => {
     refreshState();
   };
 
+  const clampBar = (rawValue: number): number =>
+    Math.min(engineState.maxBar, Math.max(0, Math.round(rawValue)));
+
   const updateStartBar = (rawValue: number): void => {
     if (!Number.isFinite(rawValue)) {
       return;
     }
 
-    const next = Math.min(engineState.maxBar, Math.max(0, Math.round(rawValue)));
-    setPendingBar(next);
+    setPendingBar(clampBar(rawValue));
   };
 
   const commitStartBar = (): void => {
@@ -91,9 +93,23 @@ const App = (): JSX.Element => {
       return;
     }
 
-    const next = Math.min(engineState.maxBar, Math.max(0, Math.round(pendingBar)));
+    const next = clampBar(pendingBar);
     setPendingBar(next);
     void runAction(() => engine.setStartBar(next));
+  };
+
+  const commitBarDirectly = (rawValue: number): void => {
+    if (!isReady) {
+      return;
+    }
+
+    const next = clampBar(rawValue);
+    setPendingBar(next);
+    void runAction(() => engine.setStartBar(next));
+  };
+
+  const moveBarBy = (delta: number): void => {
+    commitBarDirectly(pendingBar + delta);
   };
 
   const isReady = engineState.initialized && !engineState.loading;
@@ -178,6 +194,62 @@ const App = (): JSX.Element => {
 
           <div className="position-picker">
             <span className="label">ここから再生する小節</span>
+            <div className="bar-jump-buttons">
+              <button
+                type="button"
+                onClick={() => {
+                  commitBarDirectly(0);
+                }}
+                disabled={!isReady || pendingBar <= 0}
+              >
+                先頭
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveBarBy(-8);
+                }}
+                disabled={!isReady || pendingBar <= 0}
+              >
+                -8
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveBarBy(-1);
+                }}
+                disabled={!isReady || pendingBar <= 0}
+              >
+                -1
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveBarBy(1);
+                }}
+                disabled={!isReady || pendingBar >= engineState.maxBar}
+              >
+                +1
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  moveBarBy(8);
+                }}
+                disabled={!isReady || pendingBar >= engineState.maxBar}
+              >
+                +8
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitBarDirectly(engineState.maxBar);
+                }}
+                disabled={!isReady || pendingBar >= engineState.maxBar}
+              >
+                最後
+              </button>
+            </div>
             <div className="position-inputs">
               <input
                 type="range"
