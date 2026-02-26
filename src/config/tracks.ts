@@ -2,7 +2,7 @@ export const BASE_BPM = 80;
 export const MIN_BPM = 60;
 export const MAX_BPM = 100;
 export const BPM_STEP = 2;
-const AUDIO_REV = 'short-v3';
+const AUDIO_REV = 'short-v4';
 
 export type TrackId = 'violin' | 'cello' | 'piano_r' | 'piano_l' | 'click';
 
