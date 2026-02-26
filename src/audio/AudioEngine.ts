@@ -344,24 +344,77 @@ export class AudioEngine {
       throw new Error('AudioContext is not available.');
     }
 
-    const loaded = await Promise.all(
-      this.tracks.map(async (track) => {
-        const response = await fetch(track.url);
-        if (!response.ok) {
-          throw new Error(`Failed to load audio: ${track.url}`);
-        }
-
-        const arrayBuffer = await response.arrayBuffer();
-        const decoded = await this.audioCtx!.decodeAudioData(arrayBuffer.slice(0));
-        return [track.id, decoded] as const;
-      })
-    );
+    const loaded: Array<readonly [TrackId, AudioBuffer]> = [];
+    for (const track of this.tracks) {
+      const decoded = await this.fetchTrackBufferWithRetry(track);
+      loaded.push([track.id, decoded] as const);
+    }
 
     for (const [id, buffer] of loaded) {
       this.buffers.set(id, buffer);
     }
 
     this.durationSec = loaded.reduce((max, [, buffer]) => Math.max(max, buffer.duration), 0);
+  }
+
+  private async fetchTrackBufferWithRetry(track: TrackDefinition): Promise<AudioBuffer> {
+    if (!this.audioCtx) {
+      throw new Error('AudioContext is not available.');
+    }
+
+    const baseCandidates = this.buildAudioUrlCandidates(track.url);
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (const candidate of baseCandidates) {
+        const url =
+          attempt === 0
+            ? candidate
+            : this.withCacheBust(candidate, `retry-${attempt}-${Date.now().toString(36)}`);
+        try {
+          return await this.fetchAndDecodeAudio(url);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      await this.sleep(120 * (attempt + 1));
+    }
+
+    if (lastError instanceof Error) {
+      throw new Error(`Failed to load audio: ${track.url} (${lastError.message})`);
+    }
+    throw new Error(`Failed to load audio: ${track.url}`);
+  }
+
+  private buildAudioUrlCandidates(url: string): string[] {
+    const candidates = new Set<string>();
+    candidates.add(url);
+
+    const noQuery = url.split('?')[0];
+    if (noQuery) {
+      candidates.add(noQuery);
+    }
+
+    return Array.from(candidates);
+  }
+
+  private withCacheBust(url: string, token: string): string {
+    return url.includes('?') ? `${url}&cb=${token}` : `${url}?cb=${token}`;
+  }
+
+  private async fetchAndDecodeAudio(url: string): Promise<AudioBuffer> {
+    if (!this.audioCtx) {
+      throw new Error('AudioContext is not available.');
+    }
+
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(`status=${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return this.audioCtx.decodeAudioData(arrayBuffer.slice(0));
   }
 
   private buildBarMapFromClick(): void {
