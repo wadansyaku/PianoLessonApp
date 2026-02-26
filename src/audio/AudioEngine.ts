@@ -36,10 +36,26 @@ interface NavigatorWithAudioSession extends Navigator {
   };
 }
 
-const TARGET_LAST_BAR = 81;
-const TARGET_BAR_COUNT = TARGET_LAST_BAR + 1;
+const SCORE_LAST_BAR = 110;
+const CUT_START_BAR = 73;
+const CUT_END_BAR = 101;
+const TARGET_BAR_COUNT = SCORE_LAST_BAR + 1 - (CUT_END_BAR - CUT_START_BAR + 1);
+const TARGET_LAST_BAR_INDEX = TARGET_BAR_COUNT - 1;
 const MASTER_GAIN_TARGET = 0.55;
 const BPM_TRANSITION_SEC = 0.08;
+
+const buildDisplayScoreBars = (): number[] => {
+  const bars: number[] = [];
+
+  for (let bar = 0; bar <= SCORE_LAST_BAR; bar += 1) {
+    if (bar >= CUT_START_BAR && bar <= CUT_END_BAR) {
+      continue;
+    }
+    bars.push(bar);
+  }
+
+  return bars;
+};
 
 const resolveAudioContextCtor = (): AudioContextCtor | null => {
   const win = window as WindowWithWebkitAudio;
@@ -73,6 +89,7 @@ export class AudioEngine {
   private playbackRunId = 0;
   private endedTrackIds = new Set<TrackId>();
 
+  private readonly displayScoreBars = buildDisplayScoreBars();
   private barStartSec: number[] = [0];
   private selectedStartBar = 0;
 
@@ -93,7 +110,7 @@ export class AudioEngine {
     const maxBarIndex = this.getMaxBar();
     const currentBarIndex = this.findBarByInputSec(currentInputSec);
     const selectedStartBarIndex = this.clampBarNumber(this.selectedStartBar);
-    const selectableBars = Array.from({ length: maxBarIndex + 1 }, (_, index) => index);
+    const selectableBars = this.displayScoreBars.slice(0, maxBarIndex + 1);
 
     return {
       initialized: this.initialized,
@@ -102,10 +119,10 @@ export class AudioEngine {
       bpm: this.bpm,
       currentInputSec,
       durationSec: this.durationSec,
-      currentBar: currentBarIndex,
-      selectedStartBar: selectedStartBarIndex,
+      currentBar: this.getDisplayBarByIndex(currentBarIndex),
+      selectedStartBar: this.getDisplayBarByIndex(selectedStartBarIndex),
       selectedStartSec: this.getBarStartSec(selectedStartBarIndex),
-      maxBar: maxBarIndex,
+      maxBar: selectableBars[selectableBars.length - 1] ?? 0,
       selectableBars,
       tracks: this.tracks.map((track) => {
         const state = this.trackState.get(track.id)!;
@@ -274,7 +291,7 @@ export class AudioEngine {
   }
 
   async setStartBar(bar: number): Promise<void> {
-    const normalizedBar = this.clampBarNumber(Math.round(bar));
+    const normalizedBar = this.findNearestBarIndexByDisplayBar(Math.round(bar));
     this.selectedStartBar = normalizedBar;
 
     const nextOffset = this.getBarStartSec(normalizedBar);
@@ -834,11 +851,35 @@ export class AudioEngine {
     return this.barStartSec[normalizedBar] ?? 0;
   }
 
+  private getDisplayBarByIndex(index: number): number {
+    const normalizedBar = this.clampBarNumber(index);
+    return this.displayScoreBars[normalizedBar] ?? 0;
+  }
+
+  private findNearestBarIndexByDisplayBar(displayBar: number): number {
+    if (this.displayScoreBars.length === 0) {
+      return 0;
+    }
+
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (let index = 0; index < this.displayScoreBars.length; index += 1) {
+      const distance = Math.abs(this.displayScoreBars[index] - displayBar);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = index;
+      }
+    }
+
+    return this.clampBarNumber(bestIndex);
+  }
+
   private getMaxBar(): number {
     return this.clamp(
-      Math.min(TARGET_LAST_BAR, this.barStartSec.length - 1),
+      Math.min(TARGET_LAST_BAR_INDEX, this.barStartSec.length - 1),
       0,
-      TARGET_LAST_BAR
+      TARGET_LAST_BAR_INDEX
     );
   }
 
