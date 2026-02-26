@@ -21,5 +21,6 @@ export interface AudioEngineState {
   selectedStartBar: number;
   selectedStartSec: number;
   maxBar: number;
+  selectableBars: number[];
   tracks: TrackRuntimeState[];
 }

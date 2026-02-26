@@ -19,6 +19,10 @@ const App = (): JSX.Element => {
   const [pendingBar, setPendingBar] = useState(0);
   const [isEditingBar, setIsEditingBar] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectableBars = engineState.selectableBars;
+  const minSelectableBar = selectableBars[0] ?? 0;
+  const maxSelectableBar = selectableBars[selectableBars.length - 1] ?? 0;
+  const maxSelectableIndex = Math.max(0, selectableBars.length - 1);
 
   const refreshState = useCallback(() => {
     setEngineState(engine.getState());
@@ -77,8 +81,43 @@ const App = (): JSX.Element => {
     refreshState();
   };
 
-  const clampBar = (rawValue: number): number =>
-    Math.min(engineState.maxBar, Math.max(0, Math.round(rawValue)));
+  const clampBar = useCallback(
+    (rawValue: number): number => {
+      if (selectableBars.length === 0) {
+        return 0;
+      }
+
+      const rounded = Math.round(rawValue);
+      let nearest = selectableBars[0];
+      let nearestDistance = Number.POSITIVE_INFINITY;
+
+      for (const bar of selectableBars) {
+        const distance = Math.abs(bar - rounded);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearest = bar;
+        }
+      }
+
+      return nearest;
+    },
+    [selectableBars]
+  );
+
+  const findSelectableIndex = useCallback(
+    (bar: number): number => {
+      if (selectableBars.length === 0) {
+        return 0;
+      }
+
+      const nearestBar = clampBar(bar);
+      const found = selectableBars.indexOf(nearestBar);
+      return found >= 0 ? found : 0;
+    },
+    [clampBar, selectableBars]
+  );
+
+  const pendingBarIndex = findSelectableIndex(pendingBar);
 
   const updateStartBar = (rawValue: number): void => {
     if (!Number.isFinite(rawValue)) {
@@ -109,7 +148,12 @@ const App = (): JSX.Element => {
   };
 
   const moveBarBy = (delta: number): void => {
-    commitBarDirectly(pendingBar + delta);
+    if (selectableBars.length === 0) {
+      return;
+    }
+
+    const nextIndex = Math.min(maxSelectableIndex, Math.max(0, pendingBarIndex + delta));
+    commitBarDirectly(selectableBars[nextIndex] ?? minSelectableBar);
   };
 
   const isReady = engineState.initialized && !engineState.loading;
@@ -200,7 +244,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(-8);
                 }}
-                disabled={!isReady || pendingBar <= 0}
+                disabled={!isReady || pendingBarIndex <= 0}
               >
                 -8
               </button>
@@ -209,7 +253,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(-4);
                 }}
-                disabled={!isReady || pendingBar <= 0}
+                disabled={!isReady || pendingBarIndex <= 0}
               >
                 -4
               </button>
@@ -218,7 +262,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(-1);
                 }}
-                disabled={!isReady || pendingBar <= 0}
+                disabled={!isReady || pendingBarIndex <= 0}
               >
                 -1
               </button>
@@ -227,7 +271,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(1);
                 }}
-                disabled={!isReady || pendingBar >= engineState.maxBar}
+                disabled={!isReady || pendingBarIndex >= maxSelectableIndex}
               >
                 +1
               </button>
@@ -236,7 +280,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(4);
                 }}
-                disabled={!isReady || pendingBar >= engineState.maxBar}
+                disabled={!isReady || pendingBarIndex >= maxSelectableIndex}
               >
                 +4
               </button>
@@ -245,7 +289,7 @@ const App = (): JSX.Element => {
                 onClick={() => {
                   moveBarBy(8);
                 }}
-                disabled={!isReady || pendingBar >= engineState.maxBar}
+                disabled={!isReady || pendingBarIndex >= maxSelectableIndex}
               >
                 +8
               </button>
@@ -254,9 +298,9 @@ const App = (): JSX.Element => {
               <input
                 type="range"
                 min={0}
-                max={engineState.maxBar}
+                max={maxSelectableIndex}
                 step={1}
-                value={pendingBar}
+                value={pendingBarIndex}
                 onPointerDown={() => {
                   setIsEditingBar(true);
                 }}
@@ -269,14 +313,15 @@ const App = (): JSX.Element => {
                   commitStartBar();
                 }}
                 onChange={(event) => {
-                  updateStartBar(Number(event.target.value));
+                  const nextIndex = Number(event.target.value);
+                  updateStartBar(selectableBars[nextIndex] ?? minSelectableBar);
                 }}
                 disabled={!isReady}
               />
               <input
                 type="number"
-                min={0}
-                max={engineState.maxBar}
+                min={minSelectableBar}
+                max={maxSelectableBar}
                 step={1}
                 value={pendingBar}
                 onChange={(event) => {

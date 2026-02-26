@@ -16,31 +16,31 @@ export const TRACKS: TrackDefinition[] = [
   {
     id: 'violin',
     label: 'バイオリン',
-    url: '/audio/violin.mp3',
+    url: '/audio/violin.wav',
     initialVolume: 0.85
   },
   {
     id: 'cello',
     label: 'チェロ',
-    url: '/audio/cello.mp3',
+    url: '/audio/cello.wav',
     initialVolume: 0.85
   },
   {
     id: 'piano_r',
     label: 'ピアノ（右手）',
-    url: '/audio/piano_r.mp3',
+    url: '/audio/piano_r.wav',
     initialVolume: 0.9
   },
   {
     id: 'piano_l',
     label: 'ピアノ（左手）',
-    url: '/audio/piano_l.mp3',
+    url: '/audio/piano_l.wav',
     initialVolume: 0.9
   },
   {
     id: 'click',
     label: 'クリック',
-    url: '/audio/click.mp3',
+    url: '/audio/click.wav',
     initialVolume: 0.55
   }
 ];
