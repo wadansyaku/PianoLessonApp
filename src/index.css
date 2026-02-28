@@ -11,8 +11,9 @@
 
 body {
   margin: 0;
-  height: 100dvh;
-  overflow: hidden;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 button,
@@ -21,7 +22,7 @@ input {
 }
 
 #root {
-  height: 100dvh;
+  min-height: 100dvh;
   padding: clamp(6px, 1.2vh, 12px);
-  overflow: hidden;
+  overflow: visible;
 }

@@ -1,5 +1,5 @@
 .app-shell {
-  height: 100%;
+  min-height: 100%;
   display: grid;
   place-items: center;
 }
@@ -18,7 +18,9 @@
   backdrop-filter: blur(6px);
   box-shadow: 0 10px 24px rgba(23, 49, 80, 0.14);
   font-size: clamp(12px, 1.45vh, 16px);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 h1,
