@@ -41,6 +41,7 @@ interface NavigatorWithAudioSession extends Navigator {
 
 const MASTER_GAIN_TARGET = 0.55;
 const BPM_TRANSITION_SEC = 0.08;
+const AUDIO_ARRAY_BUFFER_CACHE = new Map<string, Promise<ArrayBuffer>>();
 
 const resolveAudioContextCtor = (): AudioContextCtor | null => {
   const win = window as WindowWithWebkitAudio;
@@ -361,11 +362,12 @@ export class AudioEngine {
       throw new Error('AudioContext is not available.');
     }
 
-    const loaded: Array<readonly [TrackId, AudioBuffer]> = [];
-    for (const track of this.tracks) {
-      const decoded = await this.fetchTrackBufferWithRetry(track);
-      loaded.push([track.id, decoded] as const);
-    }
+    const loaded = await Promise.all(
+      this.tracks.map(async (track) => {
+        const decoded = await this.fetchTrackBufferWithRetry(track);
+        return [track.id, decoded] as const;
+      })
+    );
 
     for (const [id, buffer] of loaded) {
       this.buffers.set(id, buffer);
@@ -389,7 +391,7 @@ export class AudioEngine {
             ? candidate
             : this.withCacheBust(candidate, `retry-${attempt}-${Date.now().toString(36)}`);
         try {
-          return await this.fetchAndDecodeAudio(url);
+          return await this.fetchAndDecodeAudio(url, attempt === 0);
         } catch (error) {
           lastError = error;
         }
@@ -420,17 +422,47 @@ export class AudioEngine {
     return url.includes('?') ? `${url}&cb=${token}` : `${url}?cb=${token}`;
   }
 
-  private async fetchAndDecodeAudio(url: string): Promise<AudioBuffer> {
+  private async getCachedArrayBuffer(url: string): Promise<ArrayBuffer> {
+    const cached = AUDIO_ARRAY_BUFFER_CACHE.get(url);
+    if (cached) {
+      const arrayBuffer = await cached;
+      return arrayBuffer.slice(0);
+    }
+
+    const loading = fetch(url, { cache: 'force-cache' })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`status=${response.status}`);
+        }
+        return response.arrayBuffer();
+      })
+      .catch((error) => {
+        AUDIO_ARRAY_BUFFER_CACHE.delete(url);
+        throw error;
+      });
+
+    AUDIO_ARRAY_BUFFER_CACHE.set(url, loading);
+    const arrayBuffer = await loading;
+    return arrayBuffer.slice(0);
+  }
+
+  private async fetchAndDecodeAudio(url: string, useCache: boolean): Promise<AudioBuffer> {
     if (!this.audioCtx) {
       throw new Error('AudioContext is not available.');
     }
 
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) {
-      throw new Error(`status=${response.status}`);
+    let arrayBuffer: ArrayBuffer;
+
+    if (useCache) {
+      arrayBuffer = await this.getCachedArrayBuffer(url);
+    } else {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`status=${response.status}`);
+      }
+      arrayBuffer = await response.arrayBuffer();
     }
 
-    const arrayBuffer = await response.arrayBuffer();
     return this.audioCtx.decodeAudioData(arrayBuffer.slice(0));
   }
 
