@@ -53,6 +53,24 @@ small {
   gap: clamp(6px, 0.8vh, 10px);
 }
 
+.pattern-picker {
+  border: 1px solid rgba(54, 89, 130, 0.2);
+  border-radius: 10px;
+  background: rgba(245, 250, 255, 0.86);
+  padding: 7px;
+}
+
+.pattern-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pattern-buttons button {
+  min-height: 34px;
+  font-size: 0.82em;
+}
+
 .transport-row {
   display: flex;
   flex-wrap: wrap;
@@ -282,6 +300,14 @@ input[type='range'] {
 @media (max-width: 640px) {
   .card {
     border-radius: 12px;
+  }
+
+  .pattern-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .pattern-buttons button {
+    min-height: 30px;
   }
 
   .bar-jump-buttons {

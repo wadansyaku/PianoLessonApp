@@ -1,8 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { createAudioEngine } from './audio/AudioEngine';
-import { BASE_BPM, BPM_STEP, MAX_BPM, MIN_BPM } from './config/tracks';
-import type { TrackId } from './config/tracks';
+import {
+  AUDIO_PATTERNS,
+  BASE_BPM,
+  BPM_STEP,
+  DEFAULT_AUDIO_PATTERN_ID,
+  MAX_BPM,
+  MIN_BPM,
+  getAudioPattern,
+  type AudioPatternId,
+  type TrackId
+} from './config/tracks';
 
 const formatSec = (value: number): string => {
   const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -14,7 +23,9 @@ const formatSec = (value: number): string => {
 };
 
 const App = (): JSX.Element => {
-  const engine = useMemo(() => createAudioEngine(), []);
+  const [audioPatternId, setAudioPatternId] = useState<AudioPatternId>(DEFAULT_AUDIO_PATTERN_ID);
+  const selectedPattern = useMemo(() => getAudioPattern(audioPatternId), [audioPatternId]);
+  const engine = useMemo(() => createAudioEngine(selectedPattern), [selectedPattern]);
   const [engineState, setEngineState] = useState(() => engine.getState());
   const [pendingBar, setPendingBar] = useState(0);
   const [isEditingBar, setIsEditingBar] = useState(false);
@@ -29,12 +40,25 @@ const App = (): JSX.Element => {
   }, [engine]);
 
   useEffect(() => {
+    setEngineState(engine.getState());
+    setPendingBar(0);
+    setIsEditingBar(false);
+    setError(null);
+  }, [engine]);
+
+  useEffect(() => {
     const timer = window.setInterval(() => {
       setEngineState(engine.getState());
     }, 90);
 
     return () => {
       window.clearInterval(timer);
+    };
+  }, [engine]);
+
+  useEffect(() => {
+    return () => {
+      engine.destroy();
     };
   }, [engine]);
 
@@ -167,6 +191,25 @@ const App = (): JSX.Element => {
         </p>
 
         <section className="top-panel">
+          <div className="pattern-picker">
+            <span className="label">聴き比べパターン</span>
+            <div className="pattern-buttons">
+              {AUDIO_PATTERNS.map((pattern) => (
+                <button
+                  key={pattern.id}
+                  type="button"
+                  className={audioPatternId === pattern.id ? 'active' : ''}
+                  onClick={() => {
+                    setAudioPatternId(pattern.id);
+                  }}
+                >
+                  {pattern.label}
+                </button>
+              ))}
+            </div>
+            <small>{selectedPattern.description}</small>
+          </div>
+
           <div className="transport-row">
             <button
               type="button"

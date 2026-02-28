@@ -1,9 +1,12 @@
 import {
+  DEFAULT_AUDIO_PATTERN_ID,
   BASE_BPM,
   BPM_STEP,
   MAX_BPM,
   MIN_BPM,
   TRACKS,
+  getAudioPattern,
+  type AudioPatternDefinition,
   type TrackDefinition,
   type TrackId
 } from '../config/tracks';
@@ -36,26 +39,8 @@ interface NavigatorWithAudioSession extends Navigator {
   };
 }
 
-const SCORE_LAST_BAR = 110;
-const CUT_START_BAR = 73;
-const CUT_END_BAR = 101;
-const TARGET_BAR_COUNT = SCORE_LAST_BAR + 1 - (CUT_END_BAR - CUT_START_BAR + 1);
-const TARGET_LAST_BAR_INDEX = TARGET_BAR_COUNT - 1;
 const MASTER_GAIN_TARGET = 0.55;
 const BPM_TRANSITION_SEC = 0.08;
-
-const buildDisplayScoreBars = (): number[] => {
-  const bars: number[] = [];
-
-  for (let bar = 0; bar <= SCORE_LAST_BAR; bar += 1) {
-    if (bar >= CUT_START_BAR && bar <= CUT_END_BAR) {
-      continue;
-    }
-    bars.push(bar);
-  }
-
-  return bars;
-};
 
 const resolveAudioContextCtor = (): AudioContextCtor | null => {
   const win = window as WindowWithWebkitAudio;
@@ -63,6 +48,11 @@ const resolveAudioContextCtor = (): AudioContextCtor | null => {
 };
 
 export class AudioEngine {
+  private readonly tracks: TrackDefinition[];
+  private readonly displayScoreBars: number[];
+  private readonly twoBeatBarIndexes = new Set<number>();
+  private readonly tempoHintByBarIndex = new Map<number, number>();
+
   private audioCtx: AudioContext | null = null;
   private mixGainNode: GainNode | null = null;
   private postFilterNode: BiquadFilterNode | null = null;
@@ -89,12 +79,35 @@ export class AudioEngine {
   private playbackRunId = 0;
   private endedTrackIds = new Set<TrackId>();
 
-  private readonly displayScoreBars = buildDisplayScoreBars();
   private barStartSec: number[] = [0];
   private selectedStartBar = 0;
 
-  constructor(private readonly tracks: TrackDefinition[] = TRACKS) {
-    for (const track of tracks) {
+  constructor(pattern: AudioPatternDefinition = getAudioPattern(DEFAULT_AUDIO_PATTERN_ID)) {
+    this.tracks = pattern.tracks.length > 0 ? pattern.tracks : TRACKS;
+    this.displayScoreBars = pattern.displayBars.length > 0 ? [...pattern.displayBars] : [0];
+
+    for (const displayBar of pattern.twoBeatDisplayBars) {
+      const index = this.displayScoreBars.indexOf(displayBar);
+      if (index >= 0) {
+        this.twoBeatBarIndexes.add(index);
+      }
+    }
+
+    if (pattern.tempoHintsByDisplayBar) {
+      for (const [displayBar, bpm] of Object.entries(pattern.tempoHintsByDisplayBar)) {
+        const numericDisplayBar = Number(displayBar);
+        if (!Number.isFinite(numericDisplayBar) || typeof bpm !== 'number' || !Number.isFinite(bpm)) {
+          continue;
+        }
+
+        const index = this.displayScoreBars.indexOf(numericDisplayBar);
+        if (index >= 0) {
+          this.tempoHintByBarIndex.set(index, bpm);
+        }
+      }
+    }
+
+    for (const track of this.tracks) {
       this.trackState.set(track.id, {
         mute: false,
         solo: false,
@@ -262,6 +275,10 @@ export class AudioEngine {
     }
   }
 
+  destroy(): void {
+    this.disposeNodes();
+  }
+
   async setBpm(nextBpm: number): Promise<void> {
     const normalized = this.normalizeBpm(nextBpm);
     if (normalized === this.bpm) {
@@ -419,7 +436,7 @@ export class AudioEngine {
 
   private buildBarMapFromClick(): void {
     const clickBuffer = this.buffers.get('click');
-    const targetBarCount = TARGET_BAR_COUNT;
+    const targetBarCount = this.displayScoreBars.length;
 
     if (!clickBuffer) {
       this.barStartSec = [0];
@@ -599,16 +616,19 @@ export class AudioEngine {
           continue;
         }
 
-        for (const step of [4, 2]) {
+        const preferredBeatCount = this.getBarBeatCount(bar);
+        const stepCandidates = preferredBeatCount === 2 ? [2, 4] : [4, 2];
+
+        for (const step of stepCandidates) {
           const nextBeat = currentBeat + step;
           if (nextBeat >= beatCount) {
             continue;
           }
 
           const barDurationSec = beatTimes[nextBeat] - beatTimes[currentBeat];
-          const expectedSec = medianBeatSec * step;
+          const expectedSec = this.getExpectedBarDurationSec(bar, step, medianBeatSec);
           const durationPenalty = -Math.abs(barDurationSec - expectedSec) / Math.max(expectedSec * 0.45, 0.12);
-          const meterPenalty = step === 4 ? 0 : -0.24;
+          const meterPenalty = step === preferredBeatCount ? 0 : -1.4;
           const score = currentScore + startScore[nextBeat] + durationPenalty + meterPenalty;
 
           if (score > dp[bar + 1][nextBeat]) {
@@ -678,13 +698,15 @@ export class AudioEngine {
 
   private buildFallbackBarStarts(durationSec: number, targetBarCount: number): number[] {
     const bars: number[] = [];
-    const barSec = (60 / BASE_BPM) * 4;
+    let cursorSec = 0;
 
     for (let bar = 0; bar < targetBarCount; bar += 1) {
-      const sec = Math.min(durationSec, bar * barSec);
+      const sec = Math.min(durationSec, cursorSec);
       if (bars.length === 0 || sec - bars[bars.length - 1] > 0.04) {
         bars.push(sec);
       }
+
+      cursorSec += this.getExpectedBarDurationSec(bar, this.getBarBeatCount(bar), 60 / BASE_BPM);
     }
 
     return bars.length > 0 ? bars : [0];
@@ -862,6 +884,19 @@ export class AudioEngine {
     }
   }
 
+  private getBarBeatCount(barIndex: number): number {
+    return this.twoBeatBarIndexes.has(barIndex) ? 2 : 4;
+  }
+
+  private getExpectedBarDurationSec(barIndex: number, beatCount: number, fallbackBeatSec: number): number {
+    const hintBpm = this.tempoHintByBarIndex.get(barIndex);
+    if (hintBpm && hintBpm > 0) {
+      return (60 / hintBpm) * beatCount;
+    }
+
+    return fallbackBeatSec * beatCount;
+  }
+
   private getTempoRatio(): number {
     return this.bpm / BASE_BPM;
   }
@@ -929,10 +964,11 @@ export class AudioEngine {
   }
 
   private getMaxBar(): number {
+    const maxPatternIndex = Math.max(0, this.displayScoreBars.length - 1);
     return this.clamp(
-      Math.min(TARGET_LAST_BAR_INDEX, this.barStartSec.length - 1),
+      Math.min(maxPatternIndex, this.barStartSec.length - 1),
       0,
-      TARGET_LAST_BAR_INDEX
+      maxPatternIndex
     );
   }
 
@@ -1118,4 +1154,5 @@ export class AudioEngine {
   }
 }
 
-export const createAudioEngine = (): AudioEngine => new AudioEngine();
+export const createAudioEngine = (pattern?: AudioPatternDefinition): AudioEngine =>
+  new AudioEngine(pattern);
