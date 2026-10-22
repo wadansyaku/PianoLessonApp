@@ -17,7 +17,7 @@ Worklet は `public/worklets/soundtouch-worklet.js` から読み込み、
 
 ## 起動手順
 
-1. Node.js 18+ を用意
+1. Node.js 22.23.4 を用意
 2. 依存インストール
 
 ```bash
